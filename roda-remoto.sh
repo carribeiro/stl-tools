@@ -45,9 +45,15 @@ opções:
   -d, --destino DIR     onde gravar os resultados (padrão: pasta do 1o arquivo)
       --manter          não apaga a pasta de trabalho remota
   -h, --ajuda
+
+As opções acima valem apenas ANTES do nome do script; do script em diante os
+argumentos vão para ele sem interpretação (use -- se algum deles colidir).
 EOF
 }
 
+# As opções do wrapper vêm ANTES do nome do script. A partir do script, tudo
+# passa adiante sem ser interpretado — senão um "-e 2" destinado ao script seria
+# engolido pelo -e/--exec daqui, que foi exatamente o que aconteceu uma vez.
 ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -57,7 +63,8 @@ while [[ $# -gt 0 ]]; do
         -d|--destino)  DESTINO="$2"; shift 2 ;;
         --manter)      MANTER=1; shift ;;
         -h|--ajuda)    uso; exit 0 ;;
-        *)             ARGS+=("$1"); shift ;;
+        --)            shift; ARGS+=("$@"); break ;;
+        *)             ARGS+=("$@"); break ;;
     esac
 done
 
