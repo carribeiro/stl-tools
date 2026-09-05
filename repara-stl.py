@@ -1,11 +1,14 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
+# # Versões fixas de propósito: a imagem de container roda sem rede, com
+# # cache uv pré-populado, e resolver versão exigiria o índice. Fixar também
+# # evita divergência numérica entre a máquina local e o servidor.
 # dependencies = [
-#     "numpy",
-#     "trimesh",
-#     "scipy",
-#     "networkx",
+#     "numpy==2.5.2",
+#     "trimesh==5.1.0",
+#     "scipy==1.18.1",
+#     "networkx==3.6.1",
 # ]
 # ///
 """

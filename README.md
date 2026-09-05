@@ -48,6 +48,12 @@ python analisa-stl.py peca.stl
 Vale manter o bloco inline mesmo assim: ele continua servindo o uso local e
 documenta, junto ao código, exatamente o que a imagem precisa instalar.
 
+As versões no bloco PEP 723 e no `requirements.txt` são **fixas de propósito**.
+Uma imagem sem rede, com cache uv pré-populado, não consegue resolver versão —
+precisaria do índice. Fixar também garante que a máquina local e o servidor
+usem o mesmo numpy/scipy: divergência numérica entre as pontas é cara de achar
+justamente porque não parece bug.
+
 ---
 
 ## Os scripts
@@ -134,6 +140,19 @@ invocação específica, útil quando o script roda dentro de um container:
 ```bash
 ./roda-remoto.sh -e "docker exec -i malhas python3" repara-stl.py peca.stl
 ```
+
+Quando o script roda dentro de um container, o diretório do job tem um caminho
+no host e outro visto de dentro. Informe a base interna com `--dir-exec` e use
+`{dir}` no `--exec` — o `rsync` continua usando o caminho do host:
+
+```bash
+REMOTO_JOBS=/srv/ferramenta/work ./roda-remoto.sh \
+  -e "docker exec -w {dir} -i ferramenta" --dir-exec /work \
+  repara-stl.py peca.stl
+```
+
+Nesse arranjo quem chama precisa estar no grupo `docker` do host, senão o
+`docker exec` pede sudo e o job trava.
 
 Descartei de propósito duas alternativas: montar o **armazenamento remoto no
 servidor** via FUSE (o arquivo cruza a rede de qualquer jeito, leitura aleatória
