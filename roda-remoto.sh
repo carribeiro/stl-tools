@@ -91,6 +91,7 @@ done
 DESTINO="${DESTINO:-.}"
 
 JOB="$(date +%Y%m%d-%H%M%S)-$$"
+SEGUNDOS_INICIO=$SECONDS
 TRABALHO="$RAIZ_JOBS/$JOB"
 
 echo ">> job $JOB em $ALVO"
@@ -152,5 +153,5 @@ else
     echo ">> pasta remota mantida: $TRABALHO"
 fi
 
-echo ">> fim (código $CODIGO)"
+echo ">> fim (código $CODIGO) · $((SECONDS - SEGUNDOS_INICIO))s no total, transferência incluída"
 exit $CODIGO

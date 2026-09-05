@@ -165,6 +165,32 @@ para uso interativo é estado a mais para emperrar).
 
 ---
 
+## Tempo, memória e log de invocações
+
+Os três scripts reportam ao final, em `stderr`, quanto levaram e o pico de
+memória do processo:
+
+```
+[repara-stl] tempo 208.4s · pico de memória 2.386 MiB
+```
+
+O pico vem do `ru_maxrss` do próprio processo, que o kernel já mantém — não há
+amostragem nem custo. O `roda-remoto.sh` reporta separadamente o tempo total de
+parede, transferência incluída, que é sempre maior que o do script.
+
+Cada invocação também vira uma linha JSON em
+`~/.local/state/stl-tools/invocacoes.jsonl` (mude com `STL_TOOLS_LOG`), com os
+argumentos, o resultado resumido por arquivo, o código de saída, o tempo e a
+memória. Serve para comparar execuções e dimensionar máquina:
+
+```bash
+jq -r '[.quando, .ferramenta, .segundos, .pico_memoria_mib] | @tsv' \
+  ~/.local/state/stl-tools/invocacoes.jsonl | column -t
+```
+
+O log é conveniência: se o caminho não for gravável, ele é silenciosamente
+ignorado e o processamento segue.
+
 ## Fluxo típico
 
 ```bash

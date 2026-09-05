@@ -22,12 +22,60 @@ sozinho no primeiro uso. Basta executar o arquivo.
 """
 
 import argparse
+import datetime
+import json
+import os
+import resource
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 import trimesh
 import fast_simplification
+
+
+# ------------------------------------------------------------- instrumentação
+# Este bloco é duplicado nos três scripts de propósito. Cada um precisa ser um
+# arquivo único e autossuficiente: o roda-remoto.sh envia UM só arquivo e a
+# imagem de container assa cada script isoladamente, então um módulo
+# compartilhado quebraria a execução remota.
+
+_INICIO = time.monotonic()
+_RESUMO = []
+
+
+def _pico_memoria_mib():
+    """Pico de RSS do processo. Não custa nada: o kernel já mantém o número."""
+    kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return kb / 1048576 if sys.platform == "darwin" else kb / 1024
+
+
+def _encerra(ferramenta, codigo):
+    """Reporta tempo e memória, e anexa uma linha ao log de invocações."""
+    segundos = time.monotonic() - _INICIO
+    memoria = _pico_memoria_mib()
+    print(f"[{ferramenta}] tempo {segundos:.1f}s · pico de memória "
+          f"{memoria:,.0f} MiB", file=sys.stderr)
+
+    caminho = os.environ.get("STL_TOOLS_LOG") or os.path.expanduser(
+        "~/.local/state/stl-tools/invocacoes.jsonl")
+    try:
+        os.makedirs(os.path.dirname(caminho), exist_ok=True)
+        with open(caminho, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "quando": datetime.datetime.now().astimezone().isoformat(
+                    timespec="seconds"),
+                "ferramenta": ferramenta,
+                "argumentos": sys.argv[1:],
+                "resultados": _RESUMO,
+                "codigo": codigo,
+                "segundos": round(segundos, 2),
+                "pico_memoria_mib": round(memoria),
+            }, ensure_ascii=False) + "\n")
+    except OSError:
+        pass  # o log é conveniência; nunca deve derrubar o processamento
+    return codigo
 
 
 def humaniza(n_bytes):
@@ -114,6 +162,13 @@ def processa(entrada, args, varias_entradas, log):
         f"{humaniza(tam_depois)} "
         f"[-{100 - 100.0 * tam_depois / tam_antes:.0f}% de tamanho]"
         f"{'' if nova.is_watertight else '  [ATENÇÃO: malha não é estanque]'}")
+    _RESUMO.append({
+        "arquivo": entrada.name, "saida": saida.name,
+        "faces_antes": faces_antes, "faces_depois": faces_depois,
+        "razao": round(faces_depois / faces_antes, 4) if faces_antes else None,
+        "bytes_antes": tam_antes, "bytes_depois": tam_depois,
+        "estanque": bool(nova.is_watertight),
+    })
     return saida
 
 
@@ -181,4 +236,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_encerra("simplifica-stl", main()))

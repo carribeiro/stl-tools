@@ -21,11 +21,59 @@ Código de saída: 0 = estanque, 1 = não estanque, 2 = erro de leitura.
 """
 
 import argparse
+import datetime
+import json
+import os
+import resource
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 import trimesh
+
+
+# ------------------------------------------------------------- instrumentação
+# Este bloco é duplicado nos três scripts de propósito. Cada um precisa ser um
+# arquivo único e autossuficiente: o roda-remoto.sh envia UM só arquivo e a
+# imagem de container assa cada script isoladamente, então um módulo
+# compartilhado quebraria a execução remota.
+
+_INICIO = time.monotonic()
+_RESUMO = []
+
+
+def _pico_memoria_mib():
+    """Pico de RSS do processo. Não custa nada: o kernel já mantém o número."""
+    kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return kb / 1048576 if sys.platform == "darwin" else kb / 1024
+
+
+def _encerra(ferramenta, codigo):
+    """Reporta tempo e memória, e anexa uma linha ao log de invocações."""
+    segundos = time.monotonic() - _INICIO
+    memoria = _pico_memoria_mib()
+    print(f"[{ferramenta}] tempo {segundos:.1f}s · pico de memória "
+          f"{memoria:,.0f} MiB", file=sys.stderr)
+
+    caminho = os.environ.get("STL_TOOLS_LOG") or os.path.expanduser(
+        "~/.local/state/stl-tools/invocacoes.jsonl")
+    try:
+        os.makedirs(os.path.dirname(caminho), exist_ok=True)
+        with open(caminho, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "quando": datetime.datetime.now().astimezone().isoformat(
+                    timespec="seconds"),
+                "ferramenta": ferramenta,
+                "argumentos": sys.argv[1:],
+                "resultados": _RESUMO,
+                "codigo": codigo,
+                "segundos": round(segundos, 2),
+                "pico_memoria_mib": round(memoria),
+            }, ensure_ascii=False) + "\n")
+    except OSError:
+        pass  # o log é conveniência; nunca deve derrubar o processamento
+    return codigo
 
 
 # ---------------------------------------------------------------- utilidades
@@ -218,7 +266,13 @@ def analisa(caminho, args, saida):
                   f"Use --max-buracos N para ver mais.")
 
     # --- fresta numérica x buraco real
-    if not estanque and not args.rapido:
+    # Só faz sentido se houver aresta aberta: soldar vértices fecha fenda, não
+    # conserta topologia. Sem borda aberta a varredura seria 6 passadas de
+    # KDTree sobre a malha inteira para responder o que já se sabe.
+    if not estanque and not args.rapido and len(bordas) == 0:
+        saida("\n  sem arestas abertas: o defeito é topológico, não de precisão"
+              " — varredura de tolerância dispensada.")
+    elif not estanque and not args.rapido:
         saida("\n  testando se são apenas frestas de precisão do float32...")
         tol = tolerancia_que_fecha(malha, escala)
         if tol is not None:
@@ -231,6 +285,17 @@ def analisa(caminho, args, saida):
             saida("    não fecha em nenhuma tolerância até 1% da peça")
             saida("    => há buraco real de geometria (falta face).")
 
+    _RESUMO.append({
+        "arquivo": caminho.name,
+        "estanque": estanque,
+        "triangulos": faces_arquivo,
+        "abertas": len(bordas),
+        "buracos": n_buracos,
+        "nao_manifold": n_nao_manifold,
+        "degeneradas": n_degeneradas,
+        "duplicadas": n_duplicadas,
+        "corpos": corpos,
+    })
     return estanque
 
 
@@ -282,4 +347,4 @@ código de saída: 0 = todos estanques, 1 = algum não estanque, 2 = erro
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_encerra("analisa-stl", main()))
