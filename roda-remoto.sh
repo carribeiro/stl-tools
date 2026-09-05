@@ -120,7 +120,10 @@ rsync -a --info=progress2 -e "$RSYNC_SSH" \
 # O cd vale para o host; dentro de um container o job está em outro caminho.
 DIR_VISIVEL="$TRABALHO"
 [[ -n "$DIR_EXEC" ]] && DIR_VISIVEL="$DIR_EXEC/$JOB"
-COMANDO="cd $TRABALHO && ${EXEC//\{dir\}/$DIR_VISIVEL} $(printf '%q' "$(basename "$SCRIPT")")"
+# ./ explícito: sem isso, um --exec que resolve por PATH (docker exec num
+# container que já traz os scripts assados) rodaria a cópia da imagem em vez da
+# que acabamos de enviar — perdendo a garantia de estar rodando esta versão.
+COMANDO="cd $TRABALHO && ${EXEC//\{dir\}/$DIR_VISIVEL} ./$(printf '%q' "$(basename "$SCRIPT")")"
 for r in ${REMOTOS[@]+"${REMOTOS[@]}"}; do
     COMANDO+=" $(printf '%q' "$r")"
 done
