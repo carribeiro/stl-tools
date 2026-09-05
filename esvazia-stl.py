@@ -413,6 +413,40 @@ def mede_espessura(interna, indice, amostra):
     return float(d.min()), float(d.mean()), float(d.max())
 
 
+def maior_buraco(malha):
+    """Diâmetro aproximado do maior buraco, ou None se não houver borda aberta.
+
+    Encadeia as arestas usadas por uma única face em laços e converte o maior
+    perímetro em diâmetro equivalente. É estimativa: serve para comparar com o
+    tamanho do voxel, não para medir geometria.
+    """
+    grupos = trimesh.grouping.group_rows(malha.edges_sorted, require_count=1)
+    if len(grupos) == 0:
+        return None
+    dirigidas = np.asarray(malha.edges)
+    saidas = {}
+    for i in grupos:
+        a, b = int(dirigidas[i][1]), int(dirigidas[i][0])
+        saidas.setdefault(a, []).append(b)
+
+    v = malha.vertices
+    usadas, maior = set(), 0.0
+    for inicio, destinos in list(saidas.items()):
+        for primeiro in destinos:
+            if (inicio, primeiro) in usadas:
+                continue
+            perimetro, a, b = 0.0, inicio, primeiro
+            while (a, b) not in usadas:
+                usadas.add((a, b))
+                perimetro += float(np.linalg.norm(v[a] - v[b]))
+                seguintes = [x for x in saidas.get(b, []) if (b, x) not in usadas]
+                if not seguintes:
+                    break
+                a, b = b, seguintes[0]
+            maior = max(maior, perimetro)
+    return maior / np.pi if maior else None
+
+
 # ------------------------------------------------------------------ pipeline
 
 def esvazia(entrada, args, log):
@@ -433,11 +467,30 @@ def esvazia(entrada, args, log):
     log(f"  dimensões : {dim[0]:.3f} x {dim[1]:.3f} x {dim[2]:.3f}")
 
     if not malha.is_watertight:
-        raise ValueError(
-            "a malha não é estanque — esvaziar uma malha aberta produz lixo, "
-            "porque não há 'dentro' definido.\n"
-            "        Rode ./analisa-stl.py para ver o defeito e ./repara-stl.py "
-            "para consertar antes.")
+        # Buraco menor que um voxel some na rasterização: a grade fecha a malha
+        # antes de o preenchimento poder vazar. Então a pergunta útil não é "é
+        # estanque?" e sim "os buracos são maiores que o voxel?".
+        passo = escala / args.resolucao
+        maior = maior_buraco(malha)
+        cabe = maior is not None and maior < passo
+        recado = (f"a malha não é estanque. O maior buraco tem ~{maior:.4f} de "
+                  f"diâmetro e o voxel desta resolução tem {passo:.4f}."
+                  if maior is not None else
+                  "a malha não é estanque e não consegui medir os buracos.")
+        if not args.aceitar_aberta:
+            raise ValueError(
+                recado + "\n        "
+                + ("Como o buraco é menor que o voxel, ele some na "
+                   "rasterização: -a/--aceitar-aberta deve funcionar aqui."
+                   if cabe else
+                   "O buraco é maior que o voxel e o preenchimento vai vazar. "
+                   "Conserte com ./repara-stl.py, ou baixe a resolução.")
+                + "\n        Veja o defeito com ./analisa-stl.py.")
+        log(f"  ATENÇÃO: {recado}")
+        log("     Prosseguindo por --aceitar-aberta"
+            + (": o buraco é sub-voxel e deve fechar na rasterização."
+               if cabe else
+               " — mas o buraco é MAIOR que o voxel; confira o resultado."))
 
     volume_solido = float(malha.volume)
     if volume_solido <= 0:
@@ -636,6 +689,9 @@ código de saída: 0 = gravou casca estanque, 1 = espessura não deixa cavidade,
     p.add_argument("-o", "--saida", type=Path, help="padrão: <nome>-oco.stl")
     p.add_argument("--amostra", type=int, default=20000, metavar="N",
                    help="vértices amostrados ao medir a parede (padrão: 20000)")
+    p.add_argument("-a", "--aceitar-aberta", action="store_true",
+                   help="prossegue com malha não estanque; só é seguro quando "
+                        "os buracos são menores que o voxel")
     p.add_argument("--ascii", action="store_true", help="grava STL ASCII (padrão: binário)")
     p.add_argument("--sobrescrever", action="store_true",
                    help="sobrescreve arquivos existentes")
