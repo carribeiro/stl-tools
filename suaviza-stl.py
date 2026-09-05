@@ -135,6 +135,29 @@ def achata_para_float32(vertices):
     return np.asarray(vertices, dtype=np.float32).astype(np.float64)
 
 
+def vertices_de_borda(malha, aneis):
+    """Vértices na borda aberta, mais `aneis` camadas de vizinhos.
+
+    Suavização não sabe lidar com borda: o vértice de borda tem vizinhança
+    incompleta, então o laplaciano o arrasta para dentro e o furo ABRE. Numa
+    malha com fendas pequenas isso é destrutivo — medimos uma fenda passar de
+    0,25 mm para 18 mm. Congelar a borda e uma faixa em volta evita o efeito.
+    """
+    grupos = trimesh.grouping.group_rows(malha.edges_sorted, require_count=1)
+    mascara = np.zeros(len(malha.vertices), dtype=bool)
+    if len(grupos) == 0:
+        return mascara
+    mascara[np.unique(malha.edges_sorted[grupos])] = True
+
+    arestas = malha.edges_unique
+    for _ in range(max(aneis, 0)):
+        nova = mascara.copy()
+        nova[arestas[mascara[arestas[:, 0]], 1]] = True
+        nova[arestas[mascara[arestas[:, 1]], 0]] = True
+        mascara = nova
+    return mascara
+
+
 def suaviza(entrada, args, log):
     entrada = Path(entrada)
     saida = Path(args.saida) if args.saida else entrada.with_name(
@@ -144,6 +167,7 @@ def suaviza(entrada, args, log):
 
     malha = carrega(entrada)
     originais = malha.vertices.copy()
+    extensao_total = float(np.max(malha.extents))
     eixo = "xyz".index(args.eixo)
     coord = originais[:, eixo]
     c0, c1 = float(coord.min()), float(coord.max())
@@ -165,6 +189,14 @@ def suaviza(entrada, args, log):
         f"com rampa de {transicao:.2f} nas bordas")
 
     peso = peso_da_faixa(coord, de, ate, transicao)
+
+    if not args.mexer_na_borda:
+        congelados = vertices_de_borda(malha, args.aneis_de_borda)
+        if congelados.any():
+            peso[congelados] = 0.0
+            log(f"  borda aberta: {int(congelados.sum()):,} vértices congelados "
+                f"({args.aneis_de_borda} anéis) — suavizar borda ABRE o furo")
+
     atingidos = int((peso > 0.01).sum())
     log(f"  vértices afetados: {atingidos:,} de {len(originais):,} "
         f"({100 * atingidos / len(originais):.1f}%)")
@@ -180,11 +212,31 @@ def suaviza(entrada, args, log):
     suavizados = malha.vertices.copy()
 
     # Mistura: fora da faixa fica exatamente o original, dentro entra o suave.
-    finais = originais + peso[:, None] * (suavizados - originais)
+    delta = peso[:, None] * (suavizados - originais)
+
+    # Teto de deslocamento. O filtro diverge em pontos isolados de triangulação
+    # ruim — medimos 123 vértices voando mais de 20 numa peça de 190, com
+    # mediana de 0,065 e p99 de 0,20. Como suavizar é, por definição, mover
+    # pouco, qualquer coisa grande é divergência e não suavização: limitar o
+    # vetor preserva a direção e mata o estrago, sem esconder que ocorreu.
+    limite = extensao_total * args.limite if not args.absoluto else args.limite
+    normas = np.linalg.norm(delta, axis=1)
+    estourados = normas > limite
+    if estourados.any():
+        delta[estourados] *= (limite / normas[estourados])[:, None]
+        log(f"  ATENÇÃO: {int(estourados.sum()):,} vértices passaram do teto de "
+            f"{limite:.3f} e foram limitados (máximo bruto era "
+            f"{normas.max():.3f}).")
+        log(f"     Isso é divergência do filtro em triangulação ruim, não "
+            f"suavização. Reduza -n se o número for grande.")
+
+    finais = originais + delta
     malha.vertices = achata_para_float32(finais)
 
     deslocamento = np.linalg.norm(finais - originais, axis=1)
-    log(f"  deslocamento: médio {deslocamento[peso > 0.01].mean():.4f} · "
+    dentro = peso > 0.01
+    log(f"  deslocamento: médio {deslocamento[dentro].mean():.4f} · "
+        f"p99 {np.percentile(deslocamento[dentro], 99):.4f} · "
         f"máximo {deslocamento.max():.4f}")
 
     saida.parent.mkdir(parents=True, exist_ok=True)
@@ -206,6 +258,7 @@ def suaviza(entrada, args, log):
         "faces": len(conferida.faces),
         "vertices_afetados": atingidos,
         "deslocamento_max": round(float(deslocamento.max()), 5),
+        "vertices_limitados": int(estourados.sum()),
         "volume_antes": volume_antes, "volume_depois": volume_depois,
     })
     return 0
@@ -248,6 +301,15 @@ código de saída: 0 = gravou, 2 = erro
     p.add_argument("--nu", type=float, default=0.53,
                    help="passo negativo do Taubin; precisa ser maior que --lamb "
                         "para não encolher (padrão: 0.53)")
+    p.add_argument("--limite", type=float, default=0.01, metavar="V",
+                   help="teto de deslocamento por vértice, em fração da maior "
+                        "dimensão (padrão: 0.01). Segue --absoluto.")
+    p.add_argument("--aneis-de-borda", type=int, default=3, metavar="N",
+                   help="camadas de vértices congeladas em volta de borda "
+                        "aberta (padrão: 3)")
+    p.add_argument("--mexer-na-borda", action="store_true",
+                   help="não congela a borda aberta; só use em malha fechada, "
+                        "porque suavizar borda alarga o furo")
     p.add_argument("--sobrescrever", action="store_true")
     p.add_argument("-q", "--silencioso", action="store_true")
     args = p.parse_args()
