@@ -123,7 +123,11 @@ DIR_VISIVEL="$TRABALHO"
 # ./ explícito: sem isso, um --exec que resolve por PATH (docker exec num
 # container que já traz os scripts assados) rodaria a cópia da imagem em vez da
 # que acabamos de enviar — perdendo a garantia de estar rodando esta versão.
-COMANDO="cd $TRABALHO && ${EXEC//\{dir\}/$DIR_VISIVEL} ./$(printf '%q' "$(basename "$SCRIPT")")"
+# chmod: o rsync -a preserva o modo do arquivo local, e invocar por ./ exige o
+# bit de execução. Sem isso, um script sem +x na origem falha do outro lado com
+# "permission denied", que não deixa nada óbvio sobre a causa.
+BASE_SCRIPT="$(printf '%q' "$(basename "$SCRIPT")")"
+COMANDO="cd $TRABALHO && chmod +x ./$BASE_SCRIPT && ${EXEC//\{dir\}/$DIR_VISIVEL} ./$BASE_SCRIPT"
 for r in ${REMOTOS[@]+"${REMOTOS[@]}"}; do
     COMANDO+=" $(printf '%q' "$r")"
 done
