@@ -1,0 +1,177 @@
+# stl-tools
+
+Ferramentas de linha de comando para inspecionar, reparar e simplificar malhas
+STL. Cada script é um arquivo único e independente, sem instalação: as
+dependências são declaradas inline (PEP 723) e o `uv` monta o ambiente sozinho
+na primeira execução.
+
+```bash
+./analisa-stl.py peca.stl        # é estanque? se não, por quê?
+./repara-stl.py peca.stl         # conserta
+./simplifica-stl.py -r 0.1 peca.stl   # reduz para 10% dos triângulos
+```
+
+## Por que não open3d
+
+A sugestão original era usar `open3d`, mas ele **não instala no Python 3.14** do
+Ubuntu 26.04: a versão 0.19.0 só publica wheels até `cp312`, e compilar do
+fonte exigiria CMake mais toda a stack de visualização.
+
+O substituto é `fast-simplification`, que implementa a **mesma decimação
+quádrica de Garland–Heckbert** do `open3d.simplify_quadric_decimation` — mesmo
+algoritmo, não um sucedâneo pior — com wheel para `cp314` e ~1 MB contra os
+~450 MB do open3d. O I/O e a topologia ficam com `trimesh`.
+
+## Requisitos
+
+Só o [`uv`](https://astral.sh/uv). Nada de `pip install`, nada de venv manual.
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Os scripts trazem `#!/usr/bin/env -S uv run --script`, então basta executá-los.
+
+---
+
+## Os scripts
+
+| Script | Para quê | Código de saída |
+|---|---|---|
+| `analisa-stl.py` | Diagnostica: é estanque? o que está quebrado? | 0 ok · 1 não estanque · 2 erro |
+| `repara-stl.py` | Solda, limpa topologia, fecha buracos | 0 fechou · 1 melhorou · 2 erro |
+| `simplifica-stl.py` | Reduz a contagem de triângulos | 0 ok · 1 erro em algum arquivo |
+| `roda-remoto.sh` | Executa qualquer um deles em outra máquina | o do script remoto |
+
+### `analisa-stl.py` — diagnóstico
+
+Responde se a malha é estanque e, quando não é, explica a causa. Reporta
+arestas abertas e quantos buracos elas formam (com o perímetro de cada um),
+arestas não-manifold, faces degeneradas e duplicadas, vértices órfãos, corpos
+separados, coerência das normais e a característica de Euler.
+
+O diferencial é **separar buraco real de fresta numérica**. STL guarda
+coordenadas em float32; vértices que deveriam coincidir muitas vezes diferem
+nos últimos bits, e a malha *parece* cheia de furos embora a geometria esteja
+inteira. O script solda os vértices por proximidade em tolerâncias crescentes e
+diz se existe alguma que fecha a peça, e qual, em percentual da maior dimensão.
+
+```
+a malha FECHA soldando vértices a 2e-05 de distância (0.00100% da maior dimensão).
+=> são frestas numéricas do float32, não falhas de modelagem.
+```
+
+Opções: `--rapido` (pula o teste de tolerância, bem mais rápido em malha
+grande), `--max-buracos N`, `-q` (só o veredito, bom para lote).
+
+### `repara-stl.py` — conserto
+
+Cinco etapas, nesta ordem — inverter a ordem cria defeitos novos:
+
+1. **Soldagem** por proximidade (KDTree), fechando as frestas de float32.
+2. **Limpeza** de faces degeneradas (área zero) e duplicadas.
+3. **Não-manifold**: desfaz arestas com 3+ faces.
+4. **Buracos**: tampa cada laço de borda com um leque a partir do centroide.
+5. **Normais**: reorienta o winding e corrige inversão.
+
+As etapas 2 a 4 brigam entre si — preencher um buraco pode criar face duplicada,
+remover uma face não-manifold pode abrir um buraco — então rodam num laço até o
+estado parar de mudar (`--passes`, padrão 6).
+
+Por segurança o script **não grava se não conseguiu fechar** a malha, a menos
+que você passe `--forcar`. Use `--sem-preencher` quando não quiser que ele
+invente geometria, e `--max-buraco FRAC` para não tampar vãos grandes demais
+(padrão: recusa laços com perímetro acima de 50% da maior dimensão).
+
+### `simplifica-stl.py` — decimação
+
+Reduz triângulos por decimação quádrica, preservando a forma.
+
+Alvo por fração (`-r 0.1` mantém 10%) ou por contagem (`-n 20000`).
+Aceita vários arquivos com `-o pasta/` para lote. `-a` troca velocidade por
+fidelidade (10 = rápido e grosseiro, 0 = lento e fiel). `--lossless` remove só
+redundância sem alterar a forma. Ainda: `--preserva-borda`, `--corrige-normais`,
+`--ascii`, `--sobrescrever`.
+
+Medido numa esfera de 82k triângulos: reduzindo a **5%**, a malha continuou
+estanque, com **0,11% de erro de volume** e desvio máximo de superfície de 1,4%
+do raio. Arquivo 95% menor.
+
+### `roda-remoto.sh` — execução remota
+
+Uma malha de 2 milhões de triângulos não cabe confortavelmente num desktop
+modesto. Este wrapper manda o script e os arquivos por `rsync` para uma máquina
+maior, executa lá e traz o resultado de volta.
+
+```bash
+REMOTO_HOST=servidor REMOTO_USER=usuario REMOTO_KEY=~/.ssh/chave \
+  ./roda-remoto.sh repara-stl.py peca.stl
+```
+
+É **síncrono e sem estado**: nada de daemon, fila ou spool. O script é reenviado
+a cada chamada, então nunca há versão velha rodando no servidor. Variáveis:
+`REMOTO_HOST` (obrigatória), `REMOTO_USER`, `REMOTO_KEY`, `REMOTO_JOBS`.
+Opções: `-s/--servidor`, `-d/--destino`, `--manter`. O único requisito no
+servidor é ter o `uv` instalado.
+
+Descartei de propósito duas alternativas: montar o **armazenamento remoto no
+servidor** via FUSE (o arquivo cruza a rede de qualquer jeito, leitura aleatória
+por FUSE é lenta e gravar o resultado de volta por ela é arriscado) e uma **fila
+de jobs com daemon** (só compensa com submissão desacompanhada ou concorrência;
+para uso interativo é estado a mais para emperrar).
+
+> **GPU não acelera nada disso.** `trimesh`, `scipy` e `fast-simplification` são
+> todos CPU. O ganho de uma máquina maior é RAM e núcleos.
+
+---
+
+## Fluxo típico
+
+```bash
+./analisa-stl.py peca.stl          # 1. entender o problema
+./repara-stl.py peca.stl           # 2. consertar
+./analisa-stl.py peca-reparado.stl # 3. conferir
+./simplifica-stl.py -r 0.1 peca-reparado.stl   # 4. aliviar
+```
+
+**Simplifique depois de reparar, nunca antes** — decimar em cima de topologia
+inválida espalha o defeito.
+
+## Armadilhas do formato STL
+
+Coisas que custaram tempo e estão embutidas nos scripts:
+
+- **STL é sopa de triângulos.** Cada face repete seus 3 vértices e nada é
+  compartilhado. Sem fundir vértices primeiro, a decimação não acha aresta para
+  colapsar e não simplifica quase nada.
+- **`trimesh.merge_vertices()` funde por arredondamento de casas decimais**, não
+  por distância: dois vértices a 2e-7 caem em baldes diferentes se estiverem na
+  fronteira do arredondamento. Para saber a menor tolerância que fecha uma
+  malha, é preciso soldar por proximidade real (KDTree + union-find); usar
+  `digits_vertex` sugere tolerâncias grosseiras o bastante para deformar a peça.
+- **`trimesh.repair.fill_holes()` só fecha furos de 3 ou 4 arestas.** Buracos
+  maiores passam batido — daí o preenchimento próprio por leque.
+- **Não escolha faces não-manifold pela área.** Uma aleta espúria pode ser
+  enorme e uma face legítima pode ser minúscula. O critério que funciona é
+  quantas das 3 arestas da face são compartilhadas por exatamente 2 faces:
+  aleta tira 0, face bem costurada tira 2.
+- **Cuidado ao trabalhar dentro de mount FUSE** (rclone, sshfs). Se o mount cai
+  e volta, o shell que já estava dentro fica com o inode velho e qualquer
+  comando morre com `Current directory does not exist` — parece erro do
+  programa, mas não é. Conserto: `cd` de novo no caminho absoluto.
+
+## Validação
+
+Os scripts foram testados contra malhas quebradas de propósito — buraco real,
+fresta de 1e-6, aleta não-manifold e as três combinadas. As quatro ficaram
+estanques após o reparo, com **0,00% de erro de volume** contra a referência, e
+a conferência foi feita pelo `analisa-stl.py`, que é código independente.
+
+## Limitações conhecidas
+
+- O preenchimento por leque tampa o buraco, mas não reconstrói curvatura: em
+  vãos grandes a tampa fica visivelmente plana. Por isso o `--max-buraco`.
+- Não há detecção de auto-interseção (faces que se atravessam). Uma malha pode
+  passar como estanque e ainda assim ser problemática para o slicer.
+- `roda-remoto.sh` é síncrono: fechou o terminal, perdeu o job. Se isso
+  incomodar, o próximo passo é `nohup` no lado remoto com um id de job.

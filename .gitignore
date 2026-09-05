@@ -1,0 +1,7 @@
+# malhas de teste e saídas
+*.stl
+!exemplos/*.stl
+
+__pycache__/
+*.pyc
+.venv/
