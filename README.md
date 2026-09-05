@@ -201,7 +201,22 @@ ignorado e o processamento segue.
 ```
 
 **Simplifique depois de reparar, nunca antes** — decimar em cima de topologia
-inválida espalha o defeito.
+inválida espalha o defeito. Mas **confira de novo depois de simplificar**: a
+decimação quádrica não garante saída manifold, e o estrago cresce com a
+redução. Medido numa malha real de 1,9 milhão de triângulos, partindo de zero
+arestas não-manifold:
+
+| redução para | não-manifold criadas |
+|---|---|
+| 90% | 40 |
+| 50% | 881 |
+| 10% | 2.210 |
+
+Baixar a agressividade não resolve: com `-a 0` o algoritmo sequer alcança o
+alvo (parou em 97,8% quando pedimos 10%). Reparar de novo depois zera as
+não-manifold, mas em troca de muitas arestas abertas — numa redução agressiva
+o dano não é recuperável. Se a peça precisa de topologia limpa, prefira uma
+razão conservadora. O `simplifica-stl.py` avisa quando degrada.
 
 ## Armadilhas do formato STL
 

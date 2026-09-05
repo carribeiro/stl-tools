@@ -85,6 +85,19 @@ def humaniza(n_bytes):
         n_bytes /= 1024
 
 
+def topologia(malha):
+    """(abertas, nao_manifold, duplicadas) — para comparar antes e depois.
+
+    A decimação quádrica não garante saída manifold: quanto mais agressiva a
+    redução, mais arestas com 3+ faces ela cria. Medir os dois lados é a única
+    forma de o estrago não passar em silêncio.
+    """
+    _, cont = np.unique(malha.edges_sorted, axis=0, return_counts=True)
+    duplicadas = len(trimesh.grouping.group_rows(
+        np.sort(malha.faces, axis=1), require_count=2))
+    return int((cont == 1).sum()), int((cont > 2).sum()), duplicadas
+
+
 def carrega(caminho):
     """Carrega o STL como uma malha única, com vértices duplicados fundidos.
 
@@ -157,6 +170,16 @@ def processa(entrada, args, varias_entradas, log):
 
     faces_depois = len(nova.faces)
     tam_depois = saida.stat().st_size
+
+    if not args.sem_conferir:
+        ab0, nm0, dp0 = topologia(malha)
+        ab1, nm1, dp1 = topologia(nova)
+        if (nm1, dp1) > (nm0, dp0):
+            log(f"  ATENÇÃO: a decimação degradou a topologia — "
+                f"nao-manifold {nm0:,} -> {nm1:,}, duplicadas {dp0:,} -> {dp1:,}, "
+                f"abertas {ab0:,} -> {ab1:,}.")
+            log(f"  O dano cresce com a redução. Considere uma razão maior, ou "
+                f"rodar o repara-stl.py depois e conferir com o analisa-stl.py.")
     pct = 100.0 * faces_depois / faces_antes if faces_antes else 0.0
     log(f"  -> {saida.name}: {faces_depois:,} triângulos ({pct:.1f}% do original), "
         f"{humaniza(tam_depois)} "
@@ -168,6 +191,8 @@ def processa(entrada, args, varias_entradas, log):
         "razao": round(faces_depois / faces_antes, 4) if faces_antes else None,
         "bytes_antes": tam_antes, "bytes_depois": tam_depois,
         "estanque": bool(nova.is_watertight),
+        "topologia_antes": None if args.sem_conferir else list(topologia(malha)),
+        "topologia_depois": None if args.sem_conferir else list(topologia(nova)),
     })
     return saida
 
@@ -205,6 +230,9 @@ def main():
                    help="remove apenas geometria redundante; ignora --razao/--faces")
     p.add_argument("--corrige-normais", action="store_true",
                    help="reorienta as normais depois de simplificar")
+    p.add_argument("--sem-conferir", action="store_true",
+                   help="não compara a topologia antes/depois (poupa alguns "
+                        "segundos em malha grande, mas o estrago passa calado)")
     p.add_argument("--ascii", action="store_true", help="grava STL ASCII (padrão: binário)")
     p.add_argument("--sobrescrever", action="store_true", help="sobrescreve arquivos existentes")
     p.add_argument("-q", "--silencioso", action="store_true")
