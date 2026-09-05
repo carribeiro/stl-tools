@@ -63,6 +63,7 @@ justamente porque não parece bug.
 | `analisa-stl.py` | Diagnostica: é estanque? o que está quebrado? | 0 ok · 1 não estanque · 2 erro |
 | `repara-stl.py` | Solda, limpa topologia, fecha buracos | 0 fechou · 1 melhorou · 2 erro |
 | `simplifica-stl.py` | Reduz a contagem de triângulos | 0 ok · 1 erro em algum arquivo |
+| `esvazia-stl.py` | Transforma sólido em casco oco de parede uniforme | 0 ok · 1 espessura inviável · 2 erro |
 | `roda-remoto.sh` | Executa qualquer um deles em outra máquina | o do script remoto |
 
 ### `analisa-stl.py` — diagnóstico
@@ -118,6 +119,40 @@ redundância sem alterar a forma. Ainda: `--preserva-borda`, `--corrige-normais`
 Medido numa esfera de 82k triângulos: reduzindo a **5%**, a malha continuou
 estanque, com **0,11% de erro de volume** e desvio máximo de superfície de 1,4%
 do raio. Arquivo 95% menor.
+
+### `esvazia-stl.py` — esvaziamento
+
+Gera uma casca de espessura uniforme: a superfície externa original mais uma
+superfície interna deslocada para dentro, formando um sólido oco. Economiza
+material e tempo de impressão.
+
+```bash
+./esvazia-stl.py -e 2 peca.stl        # parede de 2 mm
+```
+
+Voxeliza o sólido, calcula a profundidade de cada voxel por campo de distância
+e extrai a superfície interna com marching cubes. `-r/--resolucao` controla a
+grade (padrão 256 na maior dimensão): mais fino preserva detalhe e custa
+memória. `--amostra` ajusta quantos pontos são usados na medição da parede.
+
+Ele **mede a parede que saiu**, em vez de confiar no parâmetro. Numa validação
+com cubo e parede de 2, a espessura medida deu média 2,0019 — 0,10% de erro,
+com p5–p95 entre 2,0001 e 2,0058.
+
+Quando a espessura não deixa cavidade, ele detecta, informa qual é o teto (o
+raio da maior esfera inscrita na peça) e não grava nada.
+
+Duas limitações a conhecer:
+
+- **O marching cubes é denso por natureza.** Um cubo de 12 triângulos vira uma
+  casca de ~640 mil. O script avisa e sugere o `simplifica-stl.py` — mas veja
+  antes a seção de fluxo típico sobre o que a decimação faz com a topologia.
+- **Não faz furo de dreno, de propósito.** A peça sai oca e fechada, e o script
+  avisa disso em destaque. Em impressão de resina a cavidade alaga e pode
+  estourar na cura, então é preciso furar antes. A ferramenta não posiciona o
+  furo porque o lugar certo depende da orientação de impressão e de onde a
+  marca é aceitável — quem conhece a peça decide melhor que qualquer regra
+  automática.
 
 ### `roda-remoto.sh` — execução remota
 
