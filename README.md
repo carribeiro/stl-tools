@@ -253,6 +253,33 @@ não-manifold, mas em troca de muitas arestas abertas — numa redução agressi
 o dano não é recuperável. Se a peça precisa de topologia limpa, prefira uma
 razão conservadora. O `simplifica-stl.py` avisa quando degrada.
 
+## Receita: casca estrutural a partir de escaneamento
+
+Fluxo usado numa peça real (tronco de boneco escaneado, 1,9 M de triângulos,
+190 mm de altura, virando casca de 2,4 mm para impressão):
+
+```bash
+./analisa-stl.py peca.stl                      # entender o defeito
+./repara-stl.py --forcar peca.stl              # limpar topologia
+./suaviza-stl.py --de 0.70 --ate 1.0 --transicao 0.10 -n 25 \
+    -o peca-suave.stl peca-reparado.stl        # ruído de digitalização no topo
+./esvazia-stl.py -e 2.4 -r 512 -a -o peca-oca.stl peca-suave.stl
+./analisa-stl.py peca-oca.stl                  # conferir por fora
+```
+
+Quatro decisões que valem explicação:
+
+- **A ordem importa: esvazie ANTES de recortar aberturas.** Uma borda grande e
+  aberta faz o preenchimento por voxels vazar, e o esvaziamento vira lixo.
+- **O esvaziamento não altera a superfície externa**, só acrescenta a interna.
+  Perímetros de encaixe definidos no CAD sobrevivem intactos.
+- **Espessura casada com a extrusão.** 2,4 mm = 4 perímetros de 0,6 mm, sem
+  sobrar fresta de infill no meio da parede.
+- **Resolução maior nem sempre é melhor.** Aqui 640 saiu PIOR que 512: a grade
+  fina revela onde não há sólido suficiente para a parede pedida, enquanto a
+  grossa mascara por aliasing. E, em malha com furos pequenos, voxel menor que
+  o furo faz o preenchimento vazar.
+
 ## Armadilhas do formato STL
 
 Coisas que custaram tempo e estão embutidas nos scripts:
