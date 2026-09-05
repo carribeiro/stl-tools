@@ -24,13 +24,29 @@ algoritmo, não um sucedâneo pior — com wheel para `cp314` e ~1 MB contra os
 
 ## Requisitos
 
-Só o [`uv`](https://astral.sh/uv). Nada de `pip install`, nada de venv manual.
+Uso local: só o [`uv`](https://astral.sh/uv). Nada de `pip install`, nada de
+venv manual.
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 Os scripts trazem `#!/usr/bin/env -S uv run --script`, então basta executá-los.
+
+### Dentro de container (ou em qualquer ambiente já provisionado)
+
+O bloco PEP 723 no topo de cada script é um comentário Python: sob um
+interpretador comum ele é simplesmente ignorado. Então onde as dependências já
+vêm instaladas na imagem, **nada precisa mudar nos scripts** — só a forma de
+invocar, porque a shebang deixa de valer:
+
+```bash
+pip install -r requirements.txt
+python analisa-stl.py peca.stl
+```
+
+Vale manter o bloco inline mesmo assim: ele continua servindo o uso local e
+documenta, junto ao código, exatamente o que a imagem precisa instalar.
 
 ---
 
@@ -111,8 +127,13 @@ REMOTO_HOST=servidor REMOTO_USER=usuario REMOTO_KEY=~/.ssh/chave \
 É **síncrono e sem estado**: nada de daemon, fila ou spool. O script é reenviado
 a cada chamada, então nunca há versão velha rodando no servidor. Variáveis:
 `REMOTO_HOST` (obrigatória), `REMOTO_USER`, `REMOTO_KEY`, `REMOTO_JOBS`.
-Opções: `-s/--servidor`, `-d/--destino`, `--manter`. O único requisito no
-servidor é ter o `uv` instalado.
+Opções: `-s/--servidor`, `-d/--destino`, `--manter`. Ele detecta sozinho como
+rodar do outro lado — `uv` se houver, senão `python3` — e `-e/--exec` força uma
+invocação específica, útil quando o script roda dentro de um container:
+
+```bash
+./roda-remoto.sh -e "docker exec -i malhas python3" repara-stl.py peca.stl
+```
 
 Descartei de propósito duas alternativas: montar o **armazenamento remoto no
 servidor** via FUSE (o arquivo cruza a rede de qualquer jeito, leitura aleatória

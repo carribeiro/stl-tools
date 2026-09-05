@@ -9,7 +9,8 @@
 #   REMOTO_HOST=servidor roda-remoto.sh repara-stl.py peca.stl --sobrescrever
 #   REMOTO_HOST=servidor roda-remoto.sh analisa-stl.py *.stl
 #
-# Variáveis: REMOTO_HOST (obrigatória), REMOTO_USER, REMOTO_KEY, REMOTO_JOBS.
+# Variáveis: REMOTO_HOST (obrigatória), REMOTO_USER, REMOTO_KEY, REMOTO_JOBS,
+# REMOTO_EXEC (como invocar o script lá; padrão: detecta uv, senão python3).
 
 set -euo pipefail
 
@@ -17,6 +18,7 @@ HOST="${REMOTO_HOST:-}"
 USUARIO="${REMOTO_USER:-}"
 CHAVE="${REMOTO_KEY:-}"
 RAIZ_JOBS="${REMOTO_JOBS:-~/jobs}"
+EXEC="${REMOTO_EXEC:-}"
 DIR_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANTER=0
 DESTINO=""
@@ -27,6 +29,9 @@ uso() {
 
 opções:
   -s, --servidor HOST   host ssh (padrão: \$REMOTO_HOST)
+  -e, --exec CMD        como rodar o script no servidor (padrão: uv run, ou
+                        python3 se não houver uv). Ex.: "python3", ou
+                        "docker exec -i malhas python3"
   -d, --destino DIR     onde gravar os resultados (padrão: pasta do 1o arquivo)
       --manter          não apaga a pasta de trabalho remota
   -h, --ajuda
@@ -37,6 +42,7 @@ ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -s|--servidor) HOST="$2"; shift 2 ;;
+        -e|--exec)     EXEC="$2"; shift 2 ;;
         -d|--destino)  DESTINO="$2"; shift 2 ;;
         --manter)      MANTER=1; shift ;;
         -h|--ajuda)    uso; exit 0 ;;
@@ -78,11 +84,21 @@ TRABALHO="$RAIZ_JOBS/$JOB"
 
 echo ">> job $JOB em $ALVO"
 
-ssh "${SSH_OPTS[@]}" "$ALVO" "command -v uv >/dev/null || {
-    echo 'uv não está instalado no servidor. Instale com:' >&2
-    echo '  curl -LsSf https://astral.sh/uv/install.sh | sh' >&2
-    exit 127
-}; mkdir -p $TRABALHO"
+ssh "${SSH_OPTS[@]}" "$ALVO" "mkdir -p $TRABALHO"
+
+# Como executar lá: uv resolve as dependências do bloco PEP 723 na hora; num
+# container elas já vêm instaladas na imagem, então basta o interpretador.
+if [[ -z "$EXEC" ]]; then
+    EXEC=$(ssh "${SSH_OPTS[@]}" "$ALVO" \
+        'if command -v uv >/dev/null; then echo "uv run --quiet";
+         elif command -v python3 >/dev/null; then echo python3;
+         else echo NENHUM; fi')
+    if [[ "$EXEC" == "NENHUM" ]]; then
+        echo "servidor não tem uv nem python3; use -e/--exec para dizer como rodar" >&2
+        exit 127
+    fi
+fi
+echo ">> executando com: $EXEC"
 
 echo ">> enviando script e ${#ENTRADAS[@]} arquivo(s)"
 RSYNC_SSH="ssh ${SSH_OPTS[*]}"
@@ -90,7 +106,7 @@ rsync -a --info=progress2 -e "$RSYNC_SSH" \
       "$SCRIPT" ${ENTRADAS[@]+"${ENTRADAS[@]}"} "$ALVO:$TRABALHO/"
 
 # --- monta a linha de comando remota preservando espaços em nomes
-COMANDO="cd $TRABALHO && uv run --quiet $(printf '%q' "$(basename "$SCRIPT")")"
+COMANDO="cd $TRABALHO && $EXEC $(printf '%q' "$(basename "$SCRIPT")")"
 for r in ${REMOTOS[@]+"${REMOTOS[@]}"}; do
     COMANDO+=" $(printf '%q' "$r")"
 done

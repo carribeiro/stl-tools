@@ -1,0 +1,13 @@
+# Dependências dos três scripts de malha, na união do que cada um declara
+# no seu bloco PEP 723. Use este arquivo ao construir uma imagem de container,
+# onde as dependências vêm instaladas e o uv não é necessário.
+#
+#   pip install -r requirements.txt
+#   python analisa-stl.py peca.stl
+#
+# Versões validadas em 09/2026 com Python 3.14.
+fast-simplification==0.2.0
+networkx==3.6.1
+numpy==2.5.2
+scipy==1.18.1
+trimesh==5.1.0
