@@ -11,6 +11,13 @@
 #
 # Variáveis: REMOTO_HOST (obrigatória), REMOTO_USER, REMOTO_KEY, REMOTO_JOBS,
 # REMOTO_EXEC (como invocar o script lá; padrão: detecta uv, senão python3).
+#
+# Quando o script roda dentro de um container, o caminho do job visto de dentro
+# difere do caminho no host. Use {dir} no --exec e informe a base interna com
+# --dir-exec:
+#
+#   REMOTO_JOBS=/srv/ferramenta/work roda-remoto.sh \
+#     -e "docker exec -w {dir} -i ferramenta" --dir-exec /work analisa-stl.py p.stl
 
 set -euo pipefail
 
@@ -19,6 +26,7 @@ USUARIO="${REMOTO_USER:-}"
 CHAVE="${REMOTO_KEY:-}"
 RAIZ_JOBS="${REMOTO_JOBS:-~/jobs}"
 EXEC="${REMOTO_EXEC:-}"
+DIR_EXEC="${REMOTO_DIR_EXEC:-}"
 DIR_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANTER=0
 DESTINO=""
@@ -32,6 +40,8 @@ opções:
   -e, --exec CMD        como rodar o script no servidor (padrão: uv run, ou
                         python3 se não houver uv). Ex.: "python3", ou
                         "docker exec -i malhas python3"
+      --dir-exec BASE   base do diretório de trabalho como vista pelo --exec
+                        (ex.: /work num container); use {dir} no --exec
   -d, --destino DIR     onde gravar os resultados (padrão: pasta do 1o arquivo)
       --manter          não apaga a pasta de trabalho remota
   -h, --ajuda
@@ -43,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -s|--servidor) HOST="$2"; shift 2 ;;
         -e|--exec)     EXEC="$2"; shift 2 ;;
+        --dir-exec)    DIR_EXEC="$2"; shift 2 ;;
         -d|--destino)  DESTINO="$2"; shift 2 ;;
         --manter)      MANTER=1; shift ;;
         -h|--ajuda)    uso; exit 0 ;;
@@ -106,7 +117,10 @@ rsync -a --info=progress2 -e "$RSYNC_SSH" \
       "$SCRIPT" ${ENTRADAS[@]+"${ENTRADAS[@]}"} "$ALVO:$TRABALHO/"
 
 # --- monta a linha de comando remota preservando espaços em nomes
-COMANDO="cd $TRABALHO && $EXEC $(printf '%q' "$(basename "$SCRIPT")")"
+# O cd vale para o host; dentro de um container o job está em outro caminho.
+DIR_VISIVEL="$TRABALHO"
+[[ -n "$DIR_EXEC" ]] && DIR_VISIVEL="$DIR_EXEC/$JOB"
+COMANDO="cd $TRABALHO && ${EXEC//\{dir\}/$DIR_VISIVEL} $(printf '%q' "$(basename "$SCRIPT")")"
 for r in ${REMOTOS[@]+"${REMOTOS[@]}"}; do
     COMANDO+=" $(printf '%q' "$r")"
 done
