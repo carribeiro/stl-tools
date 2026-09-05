@@ -171,32 +171,45 @@ def preenche_buracos(malha, escala, max_rel):
     """
     laços = laços_de_borda(malha)
     if not laços:
-        return malha, 0, 0
+        return malha, 0, 0, 0
 
     v = np.asarray(malha.vertices)
     novos_vertices, novas_faces = [], []
     preenchidos = pulados = 0
 
+    degenerados = 0
     for laço in laços:
         perimetro = sum(float(np.linalg.norm(v[a] - v[b])) for a, b in laço)
         if max_rel and perimetro > max_rel * escala:
             pulados += 1
             continue
+
         centro = v[[a for a, _ in laço]].mean(axis=0)
+        # Um laço de vértices colineares não delimita área nenhuma: não é buraco,
+        # é fenda de largura zero (junção em T). O leque viraria triângulos de
+        # área zero, que a limpeza remove e reabrem a fenda no passe seguinte —
+        # e o centroide cai sobre a geometria existente, virando aresta
+        # não-manifold ao reler o STL. Preencher aqui piora a malha.
+        area = sum(0.5 * float(np.linalg.norm(np.cross(v[b] - v[a], centro - v[a])))
+                   for a, b in laço)
+        if area <= 1e-12 * escala ** 2:
+            degenerados += 1
+            continue
+
         indice_centro = len(v) + len(novos_vertices)
         novos_vertices.append(centro)
         novas_faces.extend([a, b, indice_centro] for a, b in laço)
         preenchidos += 1
 
     if not novas_faces:
-        return malha, 0, pulados
+        return malha, 0, pulados, degenerados
 
     nova = trimesh.Trimesh(
         vertices=np.vstack([v, np.array(novos_vertices)]),
         faces=np.vstack([malha.faces, np.array(novas_faces, dtype=np.int64)]),
         process=False,
     )
-    return nova, preenchidos, pulados
+    return nova, preenchidos, pulados, degenerados
 
 
 def repara(entrada, args, log):
@@ -247,12 +260,14 @@ def repara(entrada, args, log):
             log(f"      nao-manifold: {removidas:,} faces removidas")
 
         if not args.sem_preencher:
-            malha, cheios, pulados = preenche_buracos(malha, escala, args.max_buraco)
-            if cheios or pulados:
+            malha, cheios, pulados, degen = preenche_buracos(
+                malha, escala, args.max_buraco)
+            if cheios or pulados or degen:
                 log(f"      buracos: {cheios:,} preenchidos"
                     + (f", {pulados:,} grandes demais (acima de "
-                       f"{100 * args.max_buraco:.0f}% da peça) — deixados abertos"
-                       if pulados else ""))
+                       f"{100 * args.max_buraco:.0f}% da peça)" if pulados else "")
+                    + (f", {degen:,} de área zero (fenda/junção em T, não dá "
+                       f"para tapar com leque)" if degen else ""))
 
         if malha.is_watertight:
             log(f"      convergiu: estanque no passe {passe}")
@@ -281,9 +296,21 @@ def repara(entrada, args, log):
     saida.parent.mkdir(parents=True, exist_ok=True)
     saida.write_bytes(trimesh.exchange.stl.export_stl(malha))
     log(f"  -> {saida} ({humaniza(saida.stat().st_size)})")
-    if ok:
-        log(f"  volume: {malha.volume:.2f}")
-    return ok
+
+    # O STL guarda coordenadas em float32 e não compartilha vértices, então
+    # gravar e reler pode fundir vértices que estavam separados em memória e
+    # mudar a topologia. Relatar o estado da malha em memória seria relatar algo
+    # que o arquivo não tem: o que vale é o que ficou gravado.
+    conferida = trimesh.load_mesh(str(saida), file_type="stl", process=True)
+    a2, n2, d2, p2 = estado(conferida)
+    ok_arquivo = bool(conferida.is_watertight)
+    if (a2, n2, d2, p2) != (a1, n1, d1, p1):
+        log(f"  no arquivo (após o ida-e-volta por float32 do STL):")
+        log(f"         abertas={a2:,} nao-manifold={n2:,} degeneradas={d2:,} "
+            f"duplicadas={p2:,} estanque={ok_arquivo}")
+    if ok_arquivo:
+        log(f"  volume: {conferida.volume:.2f}")
+    return ok_arquivo
 
 
 def main():
